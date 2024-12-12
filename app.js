@@ -1,9 +1,11 @@
 const express = require("express");
 const mongoose = require("mongoose");
 const bcrypt = require("bcrypt");
-const User = require("./models/model.js"); // Import User directly
+const Student = require("./models/student.js"); // Import Student directly
+const Faculty = require("./models/faculty.js");
 const dotenv = require("dotenv");
 const cors = require("cors");
+const validateEmailDomain = require("./middlewares/validateEmailDomain"); // Import the middleware
 
 const jwt = require("jsonwebtoken");
 dotenv.config(); // Load environment variables from .env file
@@ -30,35 +32,47 @@ app.get("/", (req, res) => {
   res.send("hello world");
 });
 
-app.post("/register", async (req, res) => {
+//student sign-up
+app.post("/student/register", validateEmailDomain, async (req, res) => {
   try {
-    const { username, password } = req.body;
-    const isUserExist = await User.findOne({ username });
+    const { email, password, userName, isRepresentative } = req.body;
 
-    if (!isUserExist) {
-      if (password.length < 5) {
-        return res.status(400).send("Password is too short");
-      }
-      const hashedPassword = await bcrypt.hash(password, 10);
-      const user = await User.create({ username, password: hashedPassword });
-      return res.status(201).send(user);
-    } else {
-      return res.status(400).send("User already exists");
+    const isStudentExist = await Student.findOne({ email });
+    if (isStudentExist) {
+      return res.status(400).send("Student email is already registered");
     }
+
+    if (password.length < 8) {
+      return res.status(400).send("Password is too short");
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    const newStudent = await Student.create({
+      email,
+      userName,
+      password: hashedPassword,
+      isRepresentative,
+    });
+
+    console.log(newStudent);
+    return res.status(201).send(newStudent);
   } catch (error) {
-    return res.status(500).send({ error: "Failed to register user" });
+    console.error("Error while registering student:", error);
+    return res.status(500).send({ error: "Failed to register student" });
   }
 });
 
-app.post("/login", async (req, res) => {
-  const { username, password } = req.body;
-  const dbUser = await User.findOne({ username });
-  if (!dbUser) {
-    return res.status(400).send("Invalid user");
+//student sign-in
+app.post("/student/login", async (req, res) => {
+  const { email, password } = req.body;
+  const dbEmail = await Student.findOne({ email });
+  if (!dbEmail) {
+    return res.status(400).send("Invalid student email");
   }
-  const isPasswordEqual = await bcrypt.compare(password, dbUser.password);
+  const isPasswordEqual = await bcrypt.compare(password, dbEmail.password);
   if (isPasswordEqual) {
-    const payload = { username };
+    const payload = { email };
     const jwtToken = jwt.sign(payload, "secret_token");
     return res.status(200).send({ jwt_token: jwtToken });
   } else {
@@ -66,30 +80,153 @@ app.post("/login", async (req, res) => {
   }
 });
 
-app.put("/change-password", async (request, response) => {
-  try {
-    const { username, oldPassword, newPassword } = request.body;
-    const dbUser = await User.findOne({ username });
+//representative login check
+app.post("/representative/login", async (req, res) => {
+  const { email, password } = req.body;
+  const dbEmail = await Student.findOne({ email });
+  const { isRepresentative } = dbEmail;
+  console.log(isRepresentative);
+  if (!dbEmail) {
+    return res.status(400).send("Invalid student representative email");
+  }
+  if (!isRepresentative) {
+    return res
+      .status(400)
+      .send("Student email is not registered as representative email");
+  }
+  const isPasswordEqual = await bcrypt.compare(password, dbEmail.password);
+  if (isPasswordEqual) {
+    const payload = { email };
+    const jwtToken = jwt.sign(payload, "secret_token");
+    return res.status(200).send({ jwt_token: jwtToken });
+  } else {
+    return res.status(400).send("Invalid password");
+  }
+});
 
-    if (!dbUser) {
-      return response.status(400).send("Invalid User");
+const validatePostion = (email) => {
+  const position = email.split("@")[0];
+  // console.log(position);
+  const allowedUsernames = ["ao", "dean", "ada", "dsw"]; // List of valid usernames
+
+  if (allowedUsernames.includes(position)) {
+    console.log(`Valid position: ${position}`);
+    return true;
+  } else {
+    console.log(`Invalid position: ${position}`);
+    return false;
+  }
+};
+
+//faculty sign-up
+app.post("/faculty/register", validateEmailDomain, async (req, res) => {
+  try {
+    const { email, password, userName } = req.body;
+    const position = email.split("@")[0];
+    const isValidPostion = validatePostion(email);
+    if (!isValidPostion) return res.status(400).send("Invalid faculty email");
+    const isFacultyExist = await Faculty.findOne({ email });
+    if (isFacultyExist) {
+      return res.status(400).send("Faculty email already exists");
     }
-    const isPasswordEqual = await bcrypt.compare(oldPassword, dbUser.password);
+
+    if (password.length < 8) {
+      return res.status(400).send("Password is too short");
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    const newFaculty = await Faculty.create({
+      email,
+      userName,
+      password: hashedPassword,
+      position,
+    });
+
+    console.log(newFaculty);
+    return res.status(201).send(newFaculty);
+  } catch (error) {
+    console.error("Error registering faculty:", error);
+    return res.status(500).send({ error: "Failed to register faculty" });
+  }
+});
+
+
+
+//faculty sign-in
+app.post("/faculty/login", async (req, res) => {
+  const { email, password } = req.body;
+  const dbEmail = await Faculty.findOne({ email });
+  if (!dbEmail) {
+    return res.status(400).send("Invalid faculty email");
+  }
+  const isPasswordEqual = await bcrypt.compare(password, dbEmail.password);
+  if (isPasswordEqual) {
+    const payload = { email };
+    const jwtToken = jwt.sign(payload, "secret_token");
+    return res.status(200).send({ jwt_token: jwtToken });
+  } else {
+    return res.status(400).send("Invalid password");
+  }
+});
+
+
+//faculty password change
+app.put("/faculty/change-password", async (request, response) => {
+  try {
+    const { email, oldPassword, newPassword } = request.body;
+    const dbFaculty = await Faculty.findOne({ email });
+
+    if (!dbFaculty) {
+      return response.status(400).send("Invalid Faculty email");
+    }
+    const isPasswordEqual = await bcrypt.compare(
+      oldPassword,
+      dbFaculty.password
+    );
     if (!isPasswordEqual) {
       return response.status(400).send("Invalid current password");
     }
-    if (newPassword.length < 5) {
-      return response.status(400).send("Password is too short");
+    if (newPassword.length < 8) {
+      return response.status(400).send("New password is too short");
     }
     const hashedPassword = await bcrypt.hash(newPassword, 10);
-    await User.updateOne({ username }, { password: hashedPassword });
+    await Faculty.updateOne({ email }, { password: hashedPassword });
     return response.status(200).send("Password updated");
   } catch (error) {
     return response.status(500).send({ error: "Failed to update password" });
   }
 });
 
-app.get("/users", async (request, response) => {
-  const users = await User.find({});
-  response.send(users);
+
+//student password change
+app.put("/student/change-password", async (request, response) => {
+  try {
+    const { email, oldPassword, newPassword } = request.body;
+    const dbStudent = await Student.findOne({ email });
+
+    if (!dbStudent) {
+      return response.status(400).send("Invalid Student email");
+    }
+    const isPasswordEqual = await bcrypt.compare(
+      oldPassword,
+      dbStudent.password
+    );
+    if (!isPasswordEqual) {
+      return response.status(400).send("Invalid current password");
+    }
+    if (newPassword.length < 8) {
+      return response.status(400).send("New password is too short");
+    }
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    await Student.updateOne({ email }, { password: hashedPassword });
+    return response.status(200).send("Password updated");
+  } catch (error) {
+    return response.status(500).send({ error: "Failed to update password" });
+  }
+});
+
+app.get("/students", async (request, response) => {
+  const Students = await Student.find({});
+  response.send(Students);
 });
