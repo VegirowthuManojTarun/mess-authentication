@@ -1,314 +1,358 @@
 const express = require("express");
 const mongoose = require("mongoose");
 const bcrypt = require("bcrypt");
-const Student = require("./models/student.js"); // Import Student directly
-const Faculty = require("./models/faculty.js");
+const jwt = require("jsonwebtoken");
 const dotenv = require("dotenv");
 const cors = require("cors");
-const validateEmailDomain = require("./middlewares/validateEmailDomain"); // Import the middleware
 
-const jwt = require("jsonwebtoken");
-dotenv.config(); // Load environment variables from .env file
+const Student = require("./models/student.js");
+const Faculty = require("./models/faculty.js");
+const validateEmailDomain = require("./middlewares/validateEmailDomain");
+
+dotenv.config(); // Load environment variables
 
 const app = express();
 app.use(express.json());
 app.use(cors());
+
 const connectDB = async () => {
   try {
     await mongoose.connect(process.env.MONGODB_URI);
-    console.log("db connection success");
+    console.log("Database connection successful");
     app.listen(3000, () => {
       console.log("Server is running on port 3000");
     });
   } catch (error) {
-    console.error("db connection error:", error);
-    process.exit(1); // Exit process with failure
+    console.error("Database connection error:", error);
+    process.exit(1);
   }
 };
 
 connectDB();
 
+const generateToken = (payload) => jwt.sign(payload, process.env.SECRET_TOKEN);
+
+const validateRequestBody = (requiredFields) => (req, res, next) => {
+  const missingFields = requiredFields.filter((field) => !req.body[field]);
+  if (missingFields.length) {
+    return res.status(400).send({
+      isSuccess: false,
+      message: `Missing required fields: ${missingFields.join(", ")}`,
+    });
+  }
+  next();
+};
+
+const validatePosition = (email) => {
+  const position = email.split("@")[0];
+  const allowedUsernames = ["ao", "dean", "ada", "dsw"];
+  return allowedUsernames.includes(position);
+};
+
 app.get("/", (req, res) => {
-  res.send("hello world");
+  res.send("Hello, World!");
 });
 
-//student sign-up
-app.post("/student/register", validateEmailDomain, async (req, res) => {
-  try {
-    const { email, password, userName, isRepresentative } = req.body;
+// Student Registration
+app.post(
+  "/student/register",
+  validateEmailDomain,
+  validateRequestBody(["email", "password", "userName"]),
+  async (req, res) => {
+    try {
+      const { email, password, userName, isRepresentative } = req.body;
 
-    const isStudentExist = await Student.findOne({ email });
-    if (isStudentExist) {
-      return res.status(400).send({
+      if (await Student.findOne({ email })) {
+        return res.status(400).send({
+          isSuccess: false,
+          message: "Student email is already registered",
+        });
+      }
+
+      if (password.length < 8) {
+        return res.status(400).send({
+          isSuccess: false,
+          message: "Password is too short",
+        });
+      }
+
+      const hashedPassword = await bcrypt.hash(password, 10);
+
+      const newStudent = await Student.create({
+        email,
+        userName,
+        password: hashedPassword,
+        isRepresentative,
+      });
+
+      return res.status(201).send({
+        isSuccess: true,
+        message: "Student registration successful",
+      });
+    } catch (error) {
+      console.error("Error while registering student:", error);
+      return res.status(500).send({
         isSuccess: false,
-        message: "Student email is already registered",
+        message: "Failed to register student",
       });
     }
+  }
+);
 
-    if (password.length < 8) {
-      return res.status(400).send({
+// Student Login
+app.post(
+  "/student/login",
+  validateRequestBody(["email", "password"]),
+  async (req, res) => {
+    try {
+      const { email, password } = req.body;
+      const student = await Student.findOne({ email });
+
+      if (!student) {
+        return res.status(400).send({
+          isSuccess: false,
+          message: "Invalid student email",
+        });
+      }
+
+      const isPasswordValid = await bcrypt.compare(password, student.password);
+
+      if (!isPasswordValid) {
+        return res.status(400).send({
+          isSuccess: false,
+          message: "Invalid password",
+        });
+      }
+
+      const token = generateToken({ email });
+
+      return res.status(200).send({
+        isSuccess: true,
+        message: "Student login successful",
+        jwtToken: token,
+      });
+    } catch (error) {
+      console.error("Error during student login:", error);
+      return res.status(500).send({
         isSuccess: false,
-        message: "Password is too short",
+        message: "Login failed",
       });
     }
-
-    const hashedPassword = await bcrypt.hash(password, 10);
-
-    const newStudent = await Student.create({
-      email,
-      userName,
-      password: hashedPassword,
-      isRepresentative,
-    });
-
-    console.log(newStudent);
-    return res.status(201).send({
-      isSuccess: true,
-      message: "Student email registration is successful",
-    });
-  } catch (error) {
-    console.error("Error while registering student:", error);
-    return res.status(500).send({
-      isSuccess: false,
-      message: "Failed to register student",
-    });
   }
-});
+);
 
-//student sign-in
-app.post("/student/login", async (req, res) => {
-  const { email, password } = req.body;
-  const dbEmail = await Student.findOne({ email });
-  if (!dbEmail) {
-    return res.status(400).send({
-      isSuccess: false,
-      message: "Invalid student email",
-    });
+// Faculty Registration
+app.post(
+  "/faculty/register",
+  validateEmailDomain,
+  validateRequestBody(["email", "password", "userName"]),
+  async (req, res) => {
+    try {
+      const { email, password, userName } = req.body;
+
+      if (!validatePosition(email)) {
+        return res.status(400).send({
+          isSuccess: false,
+          message: "Invalid faculty email",
+        });
+      }
+
+      if (await Faculty.findOne({ email })) {
+        return res.status(400).send({
+          isSuccess: false,
+          message: "Faculty email already registered",
+        });
+      }
+
+      if (password.length < 8) {
+        return res.status(400).send({
+          isSuccess: false,
+          message: "Password is too short",
+        });
+      }
+
+      const hashedPassword = await bcrypt.hash(password, 10);
+
+      const newFaculty = await Faculty.create({
+        email,
+        userName,
+        password: hashedPassword,
+        position: email.split("@")[0],
+      });
+
+      return res.status(201).send({
+        isSuccess: true,
+        message: "Faculty registration successful",
+      });
+    } catch (error) {
+      console.error("Error while registering faculty:", error);
+      return res.status(500).send({
+        isSuccess: false,
+        message: "Failed to register faculty",
+      });
+    }
   }
-  const isPasswordEqual = await bcrypt.compare(password, dbEmail.password);
-  if (isPasswordEqual) {
-    const payload = { email };
-    const jwtToken = jwt.sign(payload, "secret_token");
-    return res.status(200).send({
-      isSuccess: true,
-      message: "Student login successful",
-      jwt_token: jwtToken,
-    });
-  } else {
-    return res.status(400).send({
-      isSuccess: false,
-      message: "Invalid password",
-    });
+);
+
+// Faculty Login
+app.post(
+  "/faculty/login",
+  validateRequestBody(["email", "password"]),
+  async (req, res) => {
+    try {
+      const { email, password } = req.body;
+      const faculty = await Faculty.findOne({ email });
+
+      if (!faculty) {
+        return res.status(400).send({
+          isSuccess: false,
+          message: "Invalid faculty email",
+        });
+      }
+
+      const isPasswordValid = await bcrypt.compare(password, faculty.password);
+
+      if (!isPasswordValid) {
+        return res.status(400).send({
+          isSuccess: false,
+          message: "Invalid password",
+        });
+      }
+
+      const token = generateToken({ email });
+
+      return res.status(200).send({
+        isSuccess: true,
+        message: "Faculty login successful",
+        jwtToken: token,
+      });
+    } catch (error) {
+      console.error("Error during faculty login:", error);
+      return res.status(500).send({
+        isSuccess: false,
+        message: "Login failed",
+      });
+    }
   }
-});
+);
 
 //representative login check
-app.post("/representative/login", async (req, res) => {
-  const { email, password } = req.body;
-  const dbEmail = await Student.findOne({ email });
-  const { isRepresentative } = dbEmail;
-  console.log(isRepresentative);
-  if (!dbEmail) {
-    return res.status(400).send({
-      isSuccess: false,
-      message: "Invalid student representative email",
-    });
+app.post(
+  "/representative/login",
+  validateRequestBody(["email", "password"]),
+  async (req, res) => {
+    try {
+      const { email, password } = req.body;
+      const student = await Student.findOne({ email });
+
+      if (!student) {
+        return res.status(400).send({
+          isSuccess: false,
+          message: "Invalid student representative email",
+        });
+      }
+
+      // Check if the student is registered as a representative
+      if (!student.isRepresentative) {
+        return res.status(400).send({
+          isSuccess: false,
+          message: "Student email is not registered as a representative email",
+        });
+      }
+
+      const isPasswordValid = await bcrypt.compare(password, student.password);
+
+      if (!isPasswordValid) {
+        return res.status(400).send({
+          isSuccess: false,
+          message: "Invalid password",
+        });
+      }
+
+      const token = generateToken({ email });
+
+      return res.status(200).send({
+        isSuccess: true,
+        message: "Representative login successful",
+        jwtToken: token,
+      });
+    } catch (error) {
+      console.error("Error during representative login:", error);
+      return res.status(500).send({
+        isSuccess: false,
+        message: "Login failed",
+      });
+    }
   }
-  if (!isRepresentative) {
-    return res.status(400).send({
-      isSuccess: false,
-      message: "Student email is not registered as representative email",
-    });
-  }
-  const isPasswordEqual = await bcrypt.compare(password, dbEmail.password);
-  if (isPasswordEqual) {
-    const payload = { email };
-    const jwtToken = jwt.sign(payload, "secret_token");
+);
+
+// Password Change (Reusable Logic)
+const changePassword = async (req, res, Model) => {
+  try {
+    const { email, oldPassword, newPassword } = req.body;
+
+    const user = await Model.findOne({ email });
+
+    if (!user) {
+      return res.status(400).send({
+        isSuccess: false,
+        message: "Invalid email",
+      });
+    }
+
+    if (!(await bcrypt.compare(oldPassword, user.password))) {
+      return res.status(400).send({
+        isSuccess: false,
+        message: "Invalid current password",
+      });
+    }
+
+    if (await bcrypt.compare(newPassword, user.password)) {
+      return res.status(400).send({
+        isSuccess: false,
+        message: "New password cannot be the same as the current password",
+      });
+    }
+
+    if (newPassword.length < 8) {
+      return res.status(400).send({
+        isSuccess: false,
+        message: "New password is too short",
+      });
+    }
+
+    user.password = await bcrypt.hash(newPassword, 10);
+    await user.save();
+
     return res.status(200).send({
       isSuccess: true,
-      message: "Representative login successful",
-      jwt_token: jwtToken,
+      message: "Password updated successfully",
     });
-  } else {
-    return res.status(400).send({
+  } catch (error) {
+    console.error("Error updating password:", error);
+    return res.status(500).send({
       isSuccess: false,
-      message: "Invalid password",
+      message: "Failed to update password",
     });
-  }
-});
-
-//position validation in email address
-const validatePostion = (email) => {
-  const position = email.split("@")[0];
-  // console.log(position);
-  const allowedUsernames = ["ao", "dean", "ada", "dsw"]; // List of valid usernames
-
-  if (allowedUsernames.includes(position)) {
-    console.log(`Valid position: ${position}`);
-    return true;
-  } else {
-    console.log(`Invalid position: ${position}`);
-    return false;
   }
 };
 
-//faculty sign-up
-app.post("/faculty/register", validateEmailDomain, async (req, res) => {
+app.put("/student/change-password", (req, res) =>
+  changePassword(req, res, Student)
+);
+app.put("/faculty/change-password", (req, res) =>
+  changePassword(req, res, Faculty)
+);
+
+app.get("/students", async (req, res) => {
   try {
-    const { email, password, userName } = req.body;
-    const position = email.split("@")[0];
-    const isValidPostion = validatePostion(email);
-    if (!isValidPostion) return res.status(400).send("Invalid faculty email");
-    const isFacultyExist = await Faculty.findOne({ email });
-    if (isFacultyExist) {
-      return res.status(400).send({
-        isSuccess: false,
-        message: "Faculty email already exists",
-      });
-    }
-
-    if (password.length < 8) {
-      return res.status(400).send({
-        isSuccess: false,
-        message: "Password is too short",
-      });
-    }
-
-    const hashedPassword = await bcrypt.hash(password, 10);
-
-    const newFaculty = await Faculty.create({
-      email,
-      userName,
-      password: hashedPassword,
-      position,
-    });
-
-    console.log(newFaculty);
-    return res.status(201).send({
-      isSuccess: true,
-      message: "Faculty email registration successful",
-    });
+    const students = await Student.find({});
+    res.status(200).send(students);
   } catch (error) {
-    console.error("Error registering faculty:", error);
-    return res.status(500).send({
+    console.error("Error fetching students:", error);
+    res.status(500).send({
       isSuccess: false,
-      message: "Failed to register faculty",
+      message: "Failed to fetch students",
     });
   }
-});
-
-//faculty sign-in
-app.post("/faculty/login", async (req, res) => {
-  const { email, password } = req.body;
-  const dbEmail = await Faculty.findOne({ email });
-  if (!dbEmail) {
-    return res.status(400).send({
-      isSuccess: false,
-      message: "Invalid faculty email",
-    });
-  }
-  const isPasswordEqual = await bcrypt.compare(password, dbEmail.password);
-  if (isPasswordEqual) {
-    const payload = { email };
-    const jwtToken = jwt.sign(payload, "secret_token");
-    return res.status(200).send({
-      isSuccess: true,
-      message: "Faculty login successful",
-      jwt_token: jwtToken,
-    });
-  } else {
-    return res.status(400).send({
-      isSuccess: false,
-      message: "Invalid password",
-    });
-  }
-});
-
-//faculty password change
-app.put("/faculty/change-password", async (request, response) => {
-  try {
-    const { email, oldPassword, newPassword } = request.body;
-    const dbFaculty = await Faculty.findOne({ email });
-
-    if (!dbFaculty) {
-      return response.status(400).send({
-        isSuccess: false,
-        message: "Invalid Faculty email",
-      });
-    }
-    const isPasswordEqual = await bcrypt.compare(
-      oldPassword,
-      dbFaculty.password
-    );
-    if (!isPasswordEqual) {
-      return response.status(400).send({
-        isSuccess: false,
-        message: "Invalid current password",
-      });
-    }
-    if (newPassword.length < 8) {
-      return response.status(400).send({
-        isSuccess: false,
-        message: "New password is too short",
-      });
-    }
-    const hashedPassword = await bcrypt.hash(newPassword, 10);
-    await Faculty.updateOne({ email }, { password: hashedPassword });
-    return response.status(200).send({
-      isSuccess: true,
-      message: "Password updated",
-    });
-  } catch (error) {
-    return response.status(500).send({
-      isSuccess: false,
-      message: "Failed to update password",
-    });
-  }
-});
-
-//student password change
-app.put("/student/change-password", async (request, response) => {
-  try {
-    const { email, oldPassword, newPassword } = request.body;
-    const dbStudent = await Student.findOne({ email });
-
-    if (!dbStudent) {
-      return response.status(400).send({
-        isSuccess: false,
-        message: "Invalid Student email",
-      });
-    }
-    const isPasswordEqual = await bcrypt.compare(
-      oldPassword,
-      dbStudent.password
-    );
-    if (!isPasswordEqual) {
-      return response.status(400).send({
-        isSuccess: false,
-        message: "Invalid current password",
-      });
-    }
-    if (newPassword.length < 8) {
-      return response.status(400).send({
-        isSuccess: false,
-        message: "New password is too short",
-      });
-    }
-    const hashedPassword = await bcrypt.hash(newPassword, 10);
-    await Student.updateOne({ email }, { password: hashedPassword });
-    return response.status(200).send({
-      isSuccess: true,
-      message: "Password updated",
-    });
-  } catch (error) {
-    return response.status(500).send({
-      isSuccess: false,
-      message: "Failed to update password",
-    });
-  }
-});
-
-app.get("/students", async (request, response) => {
-  const Students = await Student.find({});
-  response.send(Students);
 });
